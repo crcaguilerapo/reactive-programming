@@ -6,15 +6,17 @@ import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.springframework.boot.test.context.SpringBootTest;
-import reactor.core.publisher.ConnectableFlux;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
+import reactor.core.publisher.*;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 
@@ -230,6 +232,138 @@ class ExampleTests {
 					return i;
 				})
 				.blockLast();
+	}
+
+	//Generar secuencias
+
+	@Test
+	public void generatorWithInterval() {
+		ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
+		for (int i = 1; i <= 100; i++) {
+			queue.add(Integer.toString(i));
+		}
+
+		// Time interval between each execution (1 second in this case)
+		Duration interval = Duration.ofMillis(100);
+
+		// Creates a sequence of events that are emitted at regular intervals
+		Flux<Long> scheduledTask = Flux.interval(interval)
+				.subscribeOn(Schedulers.boundedElastic());
+
+		// Subscribing to the stream of events to perform the scheduled task
+		scheduledTask.subscribe(tick -> {
+			Thread thread = Thread.currentThread();
+			if (!queue.isEmpty()) {
+				String message = queue.poll();
+				System.out.println(thread + " First :: " + message);
+			}
+		});
+
+		// Subscribing to the stream of events to perform the scheduled task
+		scheduledTask.subscribe(tick -> {
+			Thread thread = Thread.currentThread();
+			if (!queue.isEmpty()) {
+				String message = queue.poll();
+				System.out.println(thread + " Second :: " + message);
+			}
+		});
+
+		try {
+			Thread.sleep(10000);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+
+	@Test
+	public void generatorWithoutBackpressure() {
+		ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
+		for (int i = 1; i <= 100; i++) {
+			queue.add(Integer.toString(i));
+		}
+
+		Consumer<FluxSink<String>> generator = (FluxSink<String> sink) -> {
+			while (!queue.isEmpty()) {
+				String message = queue.poll();
+				System.out.println("going to emit - " + message);
+				sink.next(message);
+			}
+			sink.complete();
+		};
+
+
+		Flux<String> dataStream = Flux.create(generator)
+				.subscribeOn(Schedulers.boundedElastic());
+
+		//First observer. takes 1 ms to process each element
+		dataStream
+				.delayElements(Duration.ofMillis(3))
+				.subscribe(i -> {
+					Thread thread = Thread.currentThread();
+					System.out.println(thread + " First :: " + i);
+				});
+
+		//Second observer. takes 2 ms to process each element
+		dataStream
+				.delayElements(Duration.ofMillis(1))
+				.subscribe(i -> {
+					Thread thread = Thread.currentThread();
+					System.out.println(thread + " Second :: " + i);
+				});
+
+		try {
+			Thread.sleep(10000);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+
+	@Test
+	public void generatorWithBackpressure() {
+		ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
+
+		for (int i = 1; i <= 100; i++) {
+			queue.add(Integer.toString(i));
+		}
+
+		//To supply an initial state
+		Callable<String> initialState = () -> queue.poll();
+
+		//BiFunction to consume the state, emit value, change state
+		BiFunction<String, SynchronousSink<String>, String> generator = (state, sink) -> {
+			sink.next(state);
+			System.out.println("going to emit - " + state);
+			if (queue.isEmpty()) {
+				sink.complete();
+			}
+			return queue.poll();
+		};
+
+		//Flux which accepts initialstate and bifunction as arg
+		Flux<String> dataStream = Flux.generate(initialState, generator)
+				.subscribeOn(Schedulers.boundedElastic());
+
+		//Observer
+		dataStream
+				.delayElements(Duration.ofMillis(1))
+				.subscribe(i -> {
+					Thread thread = Thread.currentThread();
+					System.out.println(thread + " First :: " + i);
+				});
+
+		//Observer
+		dataStream
+				.delayElements(Duration.ofMillis(100))
+				.subscribe(i -> {
+					Thread thread = Thread.currentThread();
+					System.out.println(thread + " Second :: " + i);
+				});
+
+		try {
+			Thread.sleep(10000);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
 	}
 
 }
